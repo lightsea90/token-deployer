@@ -4,7 +4,6 @@ Functions:
  */
 
 
-extern crate chrono;
 // To conserve gas, efficient serialization is achieved through Borsh (http://borsh.io/)
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Serialize, Deserialize};
@@ -14,7 +13,6 @@ use near_sdk::collections::{UnorderedMap};
 use near_sdk::{AccountId, Balance, Timestamp, Duration, Gas};
 use near_sdk::{Promise, PromiseResult};
 use near_sdk::json_types::{WrappedBalance, WrappedDuration, WrappedTimestamp};
-// use chrono::prelude::{Utc, DateTime};
 use std::collections::HashMap;
 
 near_sdk::setup_alloc!();
@@ -229,38 +227,6 @@ impl TokenDeployer {
             "vesting_end_time is smaller than vesting_start_time",
         );
         return true;
-    }
-
-    pub fn testfunc(&mut self, a: TokenAllocationInput) {
-        // env::log(
-        //     format!("x = {}", a["x"].as_str().unwrap_or("error parsing a"))
-        //     .as_bytes()
-        // );
-        // {"x":"y","b":[{"x1":1},{"y2":2}]}
-        // env::log(
-        //     format!("{}", a["b"][0]["x1"].as_u64().unwrap_or(0))
-        //     .as_bytes()
-        // );
-        // let x: Balance = b.into();
-        // let x: Balance = a.get("xx").unwrap().allocated_num.into();
-        for (account_id, alloc) in &a {
-            // let c = alloc.clone();
-            let x: Balance = alloc.allocated_num.into();
-            env::log(
-                format!("acc = {}; allocated_num = {}", account_id, x)
-                .as_bytes()
-            );
-        }
-    }
-
-    pub fn test(msg: String) -> Value {
-        return json!({
-            "env::signer_account_id": env::signer_account_id(),
-            "env::signer_account_pk()": env::signer_account_pk(),
-            "env::current_account_id()": env::current_account_id(),
-            "env::predecessor_account_id()": env::predecessor_account_id(),
-            "msg": msg,
-        });
     }
 
 }
