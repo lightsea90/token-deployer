@@ -118,8 +118,27 @@ impl TokenDeployer {
     //     check if total allocation <= total supply
     // }
 
-    pub fn get_allocation_list(self) -> Value {
-        json!({})
+    pub fn get_allocation_list(&self) -> Value {
+        let mut result = json!({});
+        let account_list = self.allocations.keys_as_vector();
+        let allocation_list = self.allocations.values_as_vector();
+        
+        for (i, account_id) in account_list.iter().enumerate() {
+            let alloc = allocation_list.get(i as u64).unwrap();
+            result.as_object_mut().unwrap().insert(
+                account_id,
+                json!({
+                    "allocated_num": WrappedBalance::from(alloc.allocated_num),
+                    "initial_release": WrappedBalance::from(alloc.initial_release),
+                    "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
+                    "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
+                    "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
+                    "claimed": WrappedBalance::from(alloc.claimed),
+                }),
+            );
+        }
+
+        return json!(result);
     }
 
     fn get_claimable_amount(&self, alloc: &TokenAllocation) -> Balance {
