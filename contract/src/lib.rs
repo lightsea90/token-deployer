@@ -90,7 +90,7 @@ impl TokenDeployer {
         );
 
         let mut s = Self {
-            ft_contract_name: ft_contract_name,
+            ft_contract_name,
             total_supply: total_supply.into(),
             allocations: UnorderedMap::new(b"alloc".to_vec()),
         };
@@ -111,14 +111,19 @@ impl TokenDeployer {
                 a.vesting_interval <= a.vesting_end_time - a.vesting_start_time,
                 "Vesting interval is larger than vesting time",
             );
+
+            let total_allocs: u128 = s.allocations 
+                .values()
+                .map(|v: TokenAllocation| v.allocated_num)
+                .sum();
+
+            assert!(
+                total_allocs + a.allocated_num <= total_supply.into(),
+                "Total allocations is greater than total supply"
+            );
             s.allocations.insert(account_id, &a);
         }
         return s;
-    }
-
-    fn validate_allocation_list(self) {
-        // check if total allocation <= total supply
-        // true
     }
 
     pub fn get_allocation_list(self) -> Value {
@@ -128,7 +133,7 @@ impl TokenDeployer {
     pub fn claim(&mut self) -> Promise {
         let account_id = env::signer_account_id();
         let alloc = self.allocations.get(&account_id).unwrap_or_default();
-        self.validate_alloc(&alloc);
+        self.assert_invalid_allocation(alloc.clone());
 
         let currrent_ts = env::block_timestamp();
         let claimable_num = {
@@ -188,7 +193,7 @@ impl TokenDeployer {
         match env::promise_result(0) {
             PromiseResult::Successful(_) => {
                 let mut alloc = self.allocations.remove(&predecessor_account_id).unwrap_or_default();
-                self.validate_alloc(&alloc);
+                self.assert_invalid_allocation(alloc.clone());
                 assert!(
                     alloc.claimed + amount <= alloc.allocated_num,
                     "Something wrong. Total claimed is greater than allocated_num",
@@ -199,17 +204,6 @@ impl TokenDeployer {
             },
             _ => false
         }
-    }
-
-    fn validate_alloc(&mut self, alloc: &TokenAllocation) {
-        assert!(
-            alloc.vesting_end_time > 0,
-            "Not a valid allocation",
-        );
-        assert!(
-            alloc.vesting_end_time > alloc.vesting_start_time,
-            "vesting_end_time is smaller than vesting_start_time",
-        );
     }
 
     pub fn testfunc(&mut self, a: TokenAllocationInput) {
@@ -242,6 +236,41 @@ impl TokenDeployer {
             "env::predecessor_account_id()": env::predecessor_account_id(),
             "msg": msg,
         });
+    }
+
+    // Utils
+    fn validate_allocation_list(self) {
+        let total_allocations: u128 = self.allocations 
+                .values()
+                .map(|a| {
+                    self.assert_invalid_allocation(a.clone());
+                    a.allocated_num
+                })
+                .sum();
+        
+        assert!(
+            total_allocations == self.total_supply,
+            "Total alloctions is not equal to total supply"
+        );
+    }
+
+    fn assert_invalid_allocation(
+        &self, 
+        allocation: TokenAllocation 
+    ) {
+            assert!(
+                allocation.allocated_num >= allocation.initial_release + allocation.claimed,
+                "Allocation is smaller than the total claimable",
+            );
+            assert!(
+                allocation.vesting_interval <= allocation.vesting_end_time - allocation.vesting_start_time,
+                "Vesting interval is larger than vesting time",
+            );
+
+            assert!(
+                allocation.vesting_end_time > 0,
+                "Not a valid allocation",
+            );
     }
 
 }
