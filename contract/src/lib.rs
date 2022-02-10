@@ -4,6 +4,7 @@ Functions:
  */
 
 
+extern crate chrono;
 // To conserve gas, efficient serialization is achieved through Borsh (http://borsh.io/)
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Serialize, Deserialize};
@@ -13,6 +14,7 @@ use near_sdk::collections::{UnorderedMap};
 use near_sdk::{AccountId, Balance, Timestamp, Duration, Gas};
 use near_sdk::{Promise, PromiseResult};
 use near_sdk::json_types::{WrappedBalance, WrappedDuration, WrappedTimestamp};
+// use chrono::prelude::{Utc, DateTime};
 use std::collections::HashMap;
 
 near_sdk::setup_alloc!();
@@ -88,7 +90,7 @@ impl TokenDeployer {
         );
 
         let mut s = Self {
-            ft_contract_name: ft_contract_name,
+            ft_contract_name,
             total_supply: total_supply.into(),
             allocations: UnorderedMap::new(b"alloc".to_vec()),
         };
@@ -109,43 +111,34 @@ impl TokenDeployer {
                 a.vesting_interval <= a.vesting_end_time - a.vesting_start_time,
                 "Vesting interval is larger than vesting time",
             );
+
+            let total_allocs: u128 = s.allocations 
+                .values()
+                .map(|v: TokenAllocation| v.allocated_num)
+                .sum();
+
+            assert!(
+                total_allocs + a.allocated_num <= total_supply.into(),
+                "Total allocations is greater than total supply"
+            );
             s.allocations.insert(account_id, &a);
         }
         return s;
     }
 
-    // fn validate_allocation_list(self) {
-    //     check if total allocation <= total supply
-    // }
-
-    pub fn get_allocation_list(&self) -> Value {
-        let mut result = json!({});
-        let account_list = self.allocations.keys_as_vector();
-        let allocation_list = self.allocations.values_as_vector();
-        
-        for (i, account_id) in account_list.iter().enumerate() {
-            let alloc = allocation_list.get(i as u64).unwrap();
-            result.as_object_mut().unwrap().insert(
-                account_id,
-                json!({
-                    "allocated_num": WrappedBalance::from(alloc.allocated_num),
-                    "initial_release": WrappedBalance::from(alloc.initial_release),
-                    "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
-                    "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
-                    "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
-                    "claimed": WrappedBalance::from(alloc.claimed),
-                }),
-            );
-        }
-
-        return json!(result);
+    pub fn get_allocation_list(self) -> Value {
+        json!({})
     }
 
-    fn get_claimable_amount(&self, alloc: &TokenAllocation) -> Balance {
+    pub fn claim(&mut self) -> Promise {
+        let account_id = env::signer_account_id();
+        let alloc = self.allocations.get(&account_id).unwrap_or_default();
+        self.assert_invalid_allocation(alloc.clone());
+
         let currrent_ts = env::block_timestamp();
-        let claimable_num: Balance = {
+        let claimable_num = {
             if currrent_ts < alloc.vesting_start_time {
-                0
+                env::panic(b"Now is not vesting time");
             } else if currrent_ts >= alloc.vesting_end_time {
                 alloc.allocated_num - alloc.initial_release
             }
@@ -160,30 +153,7 @@ impl TokenDeployer {
                     / total_intervals as Balance * intervals as Balance
             }
         };
-        let claimable_amount: Balance = claimable_num + alloc.initial_release - alloc.claimed;
-        return claimable_amount;
-    }
-
-    pub fn check_account(&self, account_id: AccountId) -> Value {
-        let alloc = self.allocations.get(&account_id).unwrap_or_default();
-        self.validate_alloc(&alloc);
-        let claimable_amount: Balance = self.get_claimable_amount(&alloc);
-
-        return json!({
-            "allocated_num": WrappedBalance::from(alloc.allocated_num),
-            "initial_release": WrappedBalance::from(alloc.initial_release),
-            "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
-            "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
-            "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
-            "claimed": WrappedBalance::from(alloc.claimed),
-            "claimable_amount": WrappedBalance::from(claimable_amount),
-        });
-    }
-
-    pub fn claim(&mut self) -> Promise {
-        let account_id = env::signer_account_id();
-        let alloc = self.allocations.get(&account_id).unwrap_or_default();
-        let amount_to_claim: Balance = self.get_claimable_amount(&alloc);
+        let amount_to_claim: Balance = claimable_num + alloc.initial_release - alloc.claimed;
         env::log(
             format!("amount to claim = {}", amount_to_claim)
             .as_bytes()
@@ -223,7 +193,7 @@ impl TokenDeployer {
         match env::promise_result(0) {
             PromiseResult::Successful(_) => {
                 let mut alloc = self.allocations.remove(&predecessor_account_id).unwrap_or_default();
-                self.validate_alloc(&alloc);
+                self.assert_invalid_allocation(alloc.clone());
                 assert!(
                     alloc.claimed + amount <= alloc.allocated_num,
                     "Something wrong. Total claimed is greater than allocated_num",
@@ -236,16 +206,71 @@ impl TokenDeployer {
         }
     }
 
-    fn validate_alloc(&self, alloc: &TokenAllocation) -> bool {
+    pub fn testfunc(&mut self, a: TokenAllocationInput) {
+        // env::log(
+        //     format!("x = {}", a["x"].as_str().unwrap_or("error parsing a"))
+        //     .as_bytes()
+        // );
+        // {"x":"y","b":[{"x1":1},{"y2":2}]}
+        // env::log(
+        //     format!("{}", a["b"][0]["x1"].as_u64().unwrap_or(0))
+        //     .as_bytes()
+        // );
+        // let x: Balance = b.into();
+        // let x: Balance = a.get("xx").unwrap().allocated_num.into();
+        for (account_id, alloc) in &a {
+            // let c = alloc.clone();
+            let x: Balance = alloc.allocated_num.into();
+            env::log(
+                format!("acc = {}; allocated_num = {}", account_id, x)
+                .as_bytes()
+            );
+        }
+    }
+
+    pub fn test(msg: String) -> Value {
+        return json!({
+            "env::signer_account_id": env::signer_account_id(),
+            "env::signer_account_pk()": env::signer_account_pk(),
+            "env::current_account_id()": env::current_account_id(),
+            "env::predecessor_account_id()": env::predecessor_account_id(),
+            "msg": msg,
+        });
+    }
+
+    // Utils
+    fn validate_allocation_list(self) {
+        let total_allocations: u128 = self.allocations 
+                .values()
+                .map(|a| {
+                    self.assert_invalid_allocation(a.clone());
+                    a.allocated_num
+                })
+                .sum();
+        
         assert!(
-            alloc.vesting_end_time > 0,
-            "Not a valid allocation",
+            total_allocations == self.total_supply,
+            "Total alloctions is not equal to total supply"
         );
-        assert!(
-            alloc.vesting_end_time > alloc.vesting_start_time,
-            "vesting_end_time is smaller than vesting_start_time",
-        );
-        return true;
+    }
+
+    fn assert_invalid_allocation(
+        &self, 
+        allocation: TokenAllocation 
+    ) {
+            assert!(
+                allocation.allocated_num >= allocation.initial_release + allocation.claimed,
+                "Allocation is smaller than the total claimable",
+            );
+            assert!(
+                allocation.vesting_interval <= allocation.vesting_end_time - allocation.vesting_start_time,
+                "Vesting interval is larger than vesting time",
+            );
+
+            assert!(
+                allocation.vesting_end_time > 0,
+                "Not a valid allocation",
+            );
     }
 
 }
