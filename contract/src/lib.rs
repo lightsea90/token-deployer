@@ -3,8 +3,6 @@ Functions:
 
  */
 
-
-extern crate chrono;
 // To conserve gas, efficient serialization is achieved through Borsh (http://borsh.io/)
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Serialize, Deserialize};
@@ -129,18 +127,48 @@ impl TokenDeployer {
     }
 
     pub fn get_allocation_list(self) -> Value {
-        json!({})
+        let mut result = json!({});
+        let account_list = self.allocations.keys_as_vector();
+        let allocation_list = self.allocations.values_as_vector();
+        
+        for (i, account_id) in account_list.iter().enumerate() {
+            let alloc = allocation_list.get(i as u64).unwrap();
+            result.as_object_mut().unwrap().insert(
+                account_id,
+                json!({
+                    "allocated_percent": alloc.allocated_percent,
+                    "initial_release": alloc.initial_release,
+                    "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
+                    "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
+                    "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
+                    "claimed": alloc.claimed,
+                }),
+            );
+        }
+        return json!(result);
     }
 
-    pub fn claim(&mut self) -> Promise {
-        let account_id = env::signer_account_id();
+    pub fn check_account(&self, account_id: AccountId) -> Value {
         let alloc = self.allocations.get(&account_id).unwrap_or_default();
         self.assert_invalid_allocation(alloc.clone());
+        let claimable_amount: Balance = self.get_claimable_amount(&alloc);
 
+        return json!({
+            "allocated_percent": alloc.allocated_percent,
+            "initial_release": alloc.initial_release,
+            "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
+            "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
+            "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
+            "claimed": alloc.claimed,
+            "claimable_amount": claimable_amount,
+        });
+    }
+   
+    fn get_claimable_amount(&self, alloc: &TokenAllocation) -> Balance {
         let currrent_ts = env::block_timestamp();
         let claimable_num = {
             if currrent_ts < alloc.vesting_start_time {
-                env::panic(b"Now is not vesting time");
+                0
             } else if currrent_ts >= alloc.vesting_end_time {
                 self.num_tokens_from_percent(alloc.allocated_percent - alloc.initial_release)
             }
@@ -156,6 +184,16 @@ impl TokenDeployer {
             }
         };
         let amount_to_claim: Balance = claimable_num + self.num_tokens_from_percent(alloc.initial_release - alloc.claimed);
+        return amount_to_claim;
+    }
+
+    pub fn claim(&mut self) -> Promise {
+        let account_id = env::signer_account_id();
+        let alloc = self.allocations.get(&account_id).unwrap_or_default();
+        self.assert_invalid_allocation(alloc.clone());
+
+        let amount_to_claim: Balance = self.get_claimable_amount(&alloc);
+
         env::log(
             format!("amount to claim = {}", amount_to_claim)
             .as_bytes()
@@ -164,11 +202,12 @@ impl TokenDeployer {
             amount_to_claim > 0,
             "There is nothing to claim at the moment",
         );
+
         let transfer_promise = Promise::new(self.ft_contract_name.clone()).function_call(
             b"ft_transfer".to_vec(), 
             json!({
                 "receiver_id": account_id,
-                "amount": WrappedBalance::from(amount_to_claim),
+                "amount": amount_to_claim,
             }).to_string().as_bytes().to_vec(), 
             1, DEFAULT_GAS_FEE,
         );
