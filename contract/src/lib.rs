@@ -151,6 +151,7 @@ impl TokenDeployer {
     pub fn check_account(&self, account_id: AccountId) -> Value {
         let alloc = self.allocations.get(&account_id).unwrap_or_default();
         self.assert_invalid_allocation(alloc.clone());
+
         let claimable_amount: Balance = self.get_claimable_amount(&alloc);
 
         return json!({
@@ -193,7 +194,6 @@ impl TokenDeployer {
         self.assert_invalid_allocation(alloc.clone());
 
         let amount_to_claim: Balance = self.get_claimable_amount(&alloc);
-
         env::log(
             format!("amount to claim = {}", amount_to_claim)
             .as_bytes()
