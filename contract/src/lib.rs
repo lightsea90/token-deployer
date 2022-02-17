@@ -3,38 +3,40 @@ Functions:
 
  */
 
-
 // To conserve gas, efficient serialization is achieved through Borsh (http://borsh.io/)
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::serde_json::{json, Value};
 use near_sdk::{env, near_bindgen, ext_contract, PanicOnDefault};
-use near_sdk::collections::{UnorderedMap};
+use near_sdk::collections::UnorderedMap;
 use near_sdk::{AccountId, Balance, Timestamp, Duration, Gas};
 use near_sdk::{Promise, PromiseResult};
 use near_sdk::json_types::{WrappedBalance, WrappedDuration, WrappedTimestamp};
+// use chrono::prelude::{Utc, DateTime};
 use std::collections::HashMap;
+use std::convert::TryInto;
 
 near_sdk::setup_alloc!();
 
 const DEFAULT_GAS_FEE: Gas = 20_000_000_000_000;
 const TOKEN_FACTORY_ACCOUNT: &str = "token-factory.tokenhub.testnet";
+const MAX_SUPPLY_PERCENT: u64 = 10000; // Decimal: 2
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Deserialize, Serialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct TokenAllocation {
-    allocated_num: Balance,
-    initial_release: Balance,
+    allocated_percent: u64,
+    initial_release: u64,
     vesting_start_time: Timestamp,
     vesting_end_time: Timestamp,
     vesting_interval: Duration,
-    claimed: Balance,
+    claimed: u64,
 }
 
 impl Default for TokenAllocation {
     fn default() -> Self {
         Self {
-            allocated_num: 0,
+            allocated_percent: 0,
             initial_release: 0,
             vesting_start_time: 0,
             vesting_end_time: 0,
@@ -52,8 +54,8 @@ pub trait ExtTokenAllocation {
 #[derive(BorshDeserialize, BorshSerialize, Clone, Deserialize, Serialize)]
 #[serde(crate = "near_sdk::serde")]
 pub struct WrappedTokenAllocation {
-    allocated_num: WrappedBalance,
-    initial_release: WrappedBalance,
+    allocated_percent: u64,
+    initial_release: u64,
     vesting_start_time: WrappedTimestamp,
     vesting_end_time: WrappedTimestamp,
     vesting_interval: WrappedDuration,
@@ -88,37 +90,43 @@ impl TokenDeployer {
         );
 
         let mut s = Self {
-            ft_contract_name: ft_contract_name,
+            ft_contract_name,
             total_supply: total_supply.into(),
             allocations: UnorderedMap::new(b"alloc".to_vec()),
         };
         for (account_id, alloc) in &allocations {
             let a = TokenAllocation {
-                allocated_num: alloc.allocated_num.into(),
-                initial_release: alloc.initial_release.into(),
+                allocated_percent: alloc.allocated_percent,
+                initial_release: alloc.initial_release,
                 vesting_start_time: alloc.vesting_start_time.into(),
                 vesting_end_time: alloc.vesting_end_time.into(),
                 vesting_interval: alloc.vesting_interval.into(),
                 claimed: 0,
             };
             assert!(
-                a.allocated_num >= a.initial_release + a.claimed,
+                a.allocated_percent >= a.initial_release + a.claimed,
                 "Allocation is smaller than the total claimable",
             );
             assert!(
                 a.vesting_interval <= a.vesting_end_time - a.vesting_start_time,
                 "Vesting interval is larger than vesting time",
             );
+
+            let total_allocs: u64 = s.allocations 
+                .values()
+                .map(|v: TokenAllocation| v.allocated_percent)
+                .sum();
+
+            assert!(
+                total_allocs + a.allocated_percent <= MAX_SUPPLY_PERCENT,
+                "Total allocations is greater than total supply"
+            );
             s.allocations.insert(account_id, &a);
         }
         return s;
     }
 
-    // fn validate_allocation_list(self) {
-    //     check if total allocation <= total supply
-    // }
-
-    pub fn get_allocation_list(&self) -> Value {
+    pub fn get_allocation_list(self) -> Value {
         let mut result = json!({});
         let account_list = self.allocations.keys_as_vector();
         let allocation_list = self.allocations.values_as_vector();
@@ -128,26 +136,42 @@ impl TokenDeployer {
             result.as_object_mut().unwrap().insert(
                 account_id,
                 json!({
-                    "allocated_num": WrappedBalance::from(alloc.allocated_num),
-                    "initial_release": WrappedBalance::from(alloc.initial_release),
+                    "allocated_percent": alloc.allocated_percent,
+                    "initial_release": alloc.initial_release,
                     "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
                     "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
                     "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
-                    "claimed": WrappedBalance::from(alloc.claimed),
+                    "claimed": alloc.claimed,
                 }),
             );
         }
-
         return json!(result);
     }
 
+    pub fn check_account(&self, account_id: AccountId) -> Value {
+        let alloc = self.allocations.get(&account_id).unwrap_or_default();
+        self.assert_invalid_allocation(alloc.clone());
+
+        let claimable_amount: Balance = self.get_claimable_amount(&alloc);
+
+        return json!({
+            "allocated_percent": alloc.allocated_percent,
+            "initial_release": alloc.initial_release,
+            "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
+            "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
+            "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
+            "claimed": alloc.claimed,
+            "claimable_amount": claimable_amount,
+        });
+    }
+   
     fn get_claimable_amount(&self, alloc: &TokenAllocation) -> Balance {
         let currrent_ts = env::block_timestamp();
-        let claimable_num: Balance = {
+        let claimable_num = {
             if currrent_ts < alloc.vesting_start_time {
                 0
             } else if currrent_ts >= alloc.vesting_end_time {
-                alloc.allocated_num - alloc.initial_release
+                self.num_tokens_from_percent(alloc.allocated_percent - alloc.initial_release)
             }
             else {
                 let intervals: u64 = 
@@ -156,33 +180,19 @@ impl TokenDeployer {
                     (alloc.vesting_end_time - alloc.vesting_start_time) / alloc.vesting_interval;
                 
                 // result
-                (alloc.allocated_num - alloc.initial_release)
+                self.num_tokens_from_percent(alloc.allocated_percent - alloc.initial_release)
                     / total_intervals as Balance * intervals as Balance
             }
         };
-        let claimable_amount: Balance = claimable_num + alloc.initial_release - alloc.claimed;
-        return claimable_amount;
-    }
-
-    pub fn check_account(&self, account_id: AccountId) -> Value {
-        let alloc = self.allocations.get(&account_id).unwrap_or_default();
-        self.validate_alloc(&alloc);
-        let claimable_amount: Balance = self.get_claimable_amount(&alloc);
-
-        return json!({
-            "allocated_num": WrappedBalance::from(alloc.allocated_num),
-            "initial_release": WrappedBalance::from(alloc.initial_release),
-            "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
-            "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
-            "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
-            "claimed": WrappedBalance::from(alloc.claimed),
-            "claimable_amount": WrappedBalance::from(claimable_amount),
-        });
+        let amount_to_claim: Balance = claimable_num + self.num_tokens_from_percent(alloc.initial_release - alloc.claimed);
+        return amount_to_claim;
     }
 
     pub fn claim(&mut self) -> Promise {
         let account_id = env::signer_account_id();
         let alloc = self.allocations.get(&account_id).unwrap_or_default();
+        self.assert_invalid_allocation(alloc.clone());
+
         let amount_to_claim: Balance = self.get_claimable_amount(&alloc);
         env::log(
             format!("amount to claim = {}", amount_to_claim)
@@ -192,11 +202,12 @@ impl TokenDeployer {
             amount_to_claim > 0,
             "There is nothing to claim at the moment",
         );
+
         let transfer_promise = Promise::new(self.ft_contract_name.clone()).function_call(
             b"ft_transfer".to_vec(), 
             json!({
                 "receiver_id": account_id,
-                "amount": WrappedBalance::from(amount_to_claim),
+                "amount": amount_to_claim,
             }).to_string().as_bytes().to_vec(), 
             1, DEFAULT_GAS_FEE,
         );
@@ -223,12 +234,12 @@ impl TokenDeployer {
         match env::promise_result(0) {
             PromiseResult::Successful(_) => {
                 let mut alloc = self.allocations.remove(&predecessor_account_id).unwrap_or_default();
-                self.validate_alloc(&alloc);
+                self.assert_invalid_allocation(alloc.clone());
                 assert!(
-                    alloc.claimed + amount <= alloc.allocated_num,
+                    alloc.claimed + self.percent_from_num_tokens(amount) <= alloc.allocated_percent,
                     "Something wrong. Total claimed is greater than allocated_num",
                 );
-                alloc.claimed += amount;
+                alloc.claimed += self.percent_from_num_tokens(amount);
                 self.allocations.insert(&predecessor_account_id, &alloc);
                 true
             },
@@ -236,16 +247,87 @@ impl TokenDeployer {
         }
     }
 
-    fn validate_alloc(&self, alloc: &TokenAllocation) -> bool {
+    pub fn testfunc(&self, a: TokenAllocationInput) {
+        // env::log(
+        //     format!("x = {}", a["x"].as_str().unwrap_or("error parsing a"))
+        //     .as_bytes()
+        // );
+        // {"x":"y","b":[{"x1":1},{"y2":2}]}
+        // env::log(
+        //     format!("{}", a["b"][0]["x1"].as_u64().unwrap_or(0))
+        //     .as_bytes()
+        // );
+        // let x: Balance = b.into();
+        // let x: Balance = a.get("xx").unwrap().allocated_num.into();
+        for (account_id, alloc) in &a {
+            // let c = alloc.clone();
+            let x: Balance = self.num_tokens_from_percent(alloc.clone().allocated_percent);
+            env::log(
+                format!("acc = {}; allocated_num = {}", account_id, x)
+                .as_bytes()
+            );
+        }
+    }
+
+    pub fn test(msg: String) -> Value {
+        return json!({
+            "env::signer_account_id": env::signer_account_id(),
+            "env::signer_account_pk()": env::signer_account_pk(),
+            "env::current_account_id()": env::current_account_id(),
+            "env::predecessor_account_id()": env::predecessor_account_id(),
+            "msg": msg,
+        });
+    }
+
+    // Utils
+    fn num_tokens_from_percent(
+        &self, 
+        percent: u64
+    ) -> Balance {
+        percent as u128 * self.total_supply / MAX_SUPPLY_PERCENT as u128
+    }
+
+    fn percent_from_num_tokens(
+        &self,
+        num_tokens: Balance
+    ) -> u64 {
+        (num_tokens * MAX_SUPPLY_PERCENT as u128 / self.total_supply)
+            .try_into()
+            .unwrap_or(0)
+    }
+
+    fn validate_allocation_list(self) {
+        let total_allocations: u64 = self.allocations 
+                .values()
+                .map(|a| {
+                    self.assert_invalid_allocation(a.clone());
+                    a.allocated_percent
+                })
+                .sum();
+        
         assert!(
-            alloc.vesting_end_time > 0,
-            "Not a valid allocation",
+            total_allocations == MAX_SUPPLY_PERCENT,
+            "Total alloctions is not equal to total supply"
         );
-        assert!(
-            alloc.vesting_end_time > alloc.vesting_start_time,
-            "vesting_end_time is smaller than vesting_start_time",
-        );
-        return true;
+    }
+
+    fn assert_invalid_allocation(
+        &self, 
+        allocation: TokenAllocation 
+    ) {
+            assert!(
+                allocation.allocated_percent>= allocation.initial_release + allocation.claimed,
+                "Allocation is smaller than the total claimable",
+            );
+            assert!(
+                allocation.vesting_interval <= allocation.vesting_end_time - allocation.vesting_start_time,
+                "Vesting interval is larger than vesting time",
+            );
+
+            assert!(
+                allocation.vesting_end_time > 0,
+                "Not a valid allocation",
+            );
     }
 
 }
