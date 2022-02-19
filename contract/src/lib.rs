@@ -247,38 +247,6 @@ impl TokenDeployer {
         }
     }
 
-    pub fn testfunc(&self, a: TokenAllocationInput) {
-        // env::log(
-        //     format!("x = {}", a["x"].as_str().unwrap_or("error parsing a"))
-        //     .as_bytes()
-        // );
-        // {"x":"y","b":[{"x1":1},{"y2":2}]}
-        // env::log(
-        //     format!("{}", a["b"][0]["x1"].as_u64().unwrap_or(0))
-        //     .as_bytes()
-        // );
-        // let x: Balance = b.into();
-        // let x: Balance = a.get("xx").unwrap().allocated_num.into();
-        for (account_id, alloc) in &a {
-            // let c = alloc.clone();
-            let x: Balance = self.num_tokens_from_percent(alloc.clone().allocated_percent);
-            env::log(
-                format!("acc = {}; allocated_num = {}", account_id, x)
-                .as_bytes()
-            );
-        }
-    }
-
-    pub fn test(msg: String) -> Value {
-        return json!({
-            "env::signer_account_id": env::signer_account_id(),
-            "env::signer_account_pk()": env::signer_account_pk(),
-            "env::current_account_id()": env::current_account_id(),
-            "env::predecessor_account_id()": env::predecessor_account_id(),
-            "msg": msg,
-        });
-    }
-
     // Utils
     fn num_tokens_from_percent(
         &self, 
@@ -307,7 +275,7 @@ impl TokenDeployer {
         
         assert!(
             total_allocations == MAX_SUPPLY_PERCENT,
-            "Total alloctions is not equal to total supply"
+            "Total allocations is not equal to total supply"
         );
     }
 
