@@ -19,7 +19,7 @@ use std::convert::TryInto;
 near_sdk::setup_alloc!();
 
 const DEFAULT_GAS_FEE: Gas = 20_000_000_000_000;
-const TOKEN_FACTORY_ACCOUNT: &str = "token-factory.tokenhub.testnet";
+const TOKEN_FACTORY_ACCOUNT: &str = "tokenhub.testnet";
 const MAX_SUPPLY_PERCENT: u64 = 10000; // Decimal: 2
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Deserialize, Serialize)]
@@ -207,7 +207,7 @@ impl TokenDeployer {
             b"ft_transfer".to_vec(), 
             json!({
                 "receiver_id": account_id,
-                "amount": amount_to_claim,
+                "amount": WrappedBalance::from(amount_to_claim),
             }).to_string().as_bytes().to_vec(), 
             1, DEFAULT_GAS_FEE,
         );
