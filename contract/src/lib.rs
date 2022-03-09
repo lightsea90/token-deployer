@@ -161,7 +161,7 @@ impl TokenDeployer {
             "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
             "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
             "claimed": alloc.claimed,
-            "claimable_amount": claimable_amount,
+            "claimable_amount": WrappedBalance::from(claimable_amount),
         });
     }
    
