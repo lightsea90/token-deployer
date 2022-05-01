@@ -14,12 +14,11 @@ use near_sdk::{AccountId, Balance, Duration, Gas, Timestamp};
 use near_sdk::{Promise, PromiseResult};
 // use chrono::prelude::{Utc, DateTime};
 use std::collections::HashMap;
-use std::convert::TryInto;
 
 near_sdk::setup_alloc!();
 
 const DEFAULT_GAS_FEE: Gas = 20_000_000_000_000;
-const TOKEN_FACTORY_ACCOUNT: &str = "tokenhub.testnet";
+const TOKEN_FACTORY_ACCOUNT: &str = "factory.tokenhub.testnet";
 const MAX_SUPPLY_PERCENT: u64 = 10000; // Decimal: 2
 
 #[derive(BorshDeserialize, BorshSerialize, Clone, Deserialize, Serialize)]
@@ -176,7 +175,12 @@ impl TokenDeployer {
         return amount_to_claim;
     }
 
+    #[payable]
     pub fn claim(&mut self) -> Promise {
+        assert!(
+            env::attached_deposit() >= 1,
+            "Need at least 1 yoctoNEAR to execute",
+        );
         let account_id = env::signer_account_id();
         let alloc = self.allocations.get(&account_id).unwrap_or_default();
         self.assert_invalid_allocation(alloc.clone());
@@ -188,18 +192,36 @@ impl TokenDeployer {
             "There is nothing to claim at the moment",
         );
 
-        let transfer_promise = Promise::new(self.ft_contract_name.clone()).function_call(
-            b"ft_transfer".to_vec(),
-            json!({
-                "receiver_id": account_id,
-                "amount": WrappedBalance::from(amount_to_claim),
-            })
-            .to_string()
-            .as_bytes()
-            .to_vec(),
-            1,
-            DEFAULT_GAS_FEE,
-        );
+        let transfer_promise: Promise;
+        if env::attached_deposit() > 1 {
+            transfer_promise = Promise::new(self.ft_contract_name.clone())
+                .function_call(
+                    b"storage_deposit".to_vec(), 
+                    json!({
+                        "account_id": account_id,
+                    }).to_string().as_bytes().to_vec(), 
+                    env::attached_deposit(), DEFAULT_GAS_FEE,
+            ).then(
+                Promise::new(self.ft_contract_name.clone()).function_call(
+                    b"ft_transfer".to_vec(),
+                    json!({
+                        "receiver_id": account_id,
+                        "amount": WrappedBalance::from(amount_to_claim),
+                    }).to_string().as_bytes().to_vec(),
+                    1, DEFAULT_GAS_FEE,
+                )
+            );
+        } else {
+            transfer_promise = Promise::new(self.ft_contract_name.clone()).function_call(
+                b"ft_transfer".to_vec(),
+                json!({
+                    "receiver_id": account_id,
+                    "amount": WrappedBalance::from(amount_to_claim),
+                })
+                .to_string().as_bytes().to_vec(),
+                1, DEFAULT_GAS_FEE,
+            );
+        }
 
         return transfer_promise.then(ext_self::on_claim_finished(
             account_id,
@@ -242,12 +264,6 @@ impl TokenDeployer {
     // Utils
     fn num_tokens_from_percent(&self, percent: u64) -> Balance {
         percent as u128 * self.total_supply / MAX_SUPPLY_PERCENT as u128
-    }
-
-    fn percent_from_num_tokens(&self, num_tokens: Balance) -> u64 {
-        (num_tokens * MAX_SUPPLY_PERCENT as u128 / self.total_supply)
-            .try_into()
-            .unwrap_or(0)
     }
 
     fn assert_invalid_allocation(&self, allocation: TokenAllocation) {
