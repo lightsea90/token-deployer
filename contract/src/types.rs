@@ -41,9 +41,8 @@ impl From<TokenAllocation> for WrappedTokenAllocation {
             initial_release: allocs.initial_release,
             vesting_start_time: WrappedTimestamp::from(allocs.vesting_start_time),
             vesting_end_time: WrappedTimestamp::from(allocs.vesting_end_time),
-            vesting_interval: WrappedDuration::from(allocs.vesting_interval)
+            vesting_interval: WrappedDuration::from(allocs.vesting_interval),
         }
-
     }
 }
 
