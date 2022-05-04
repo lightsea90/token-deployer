@@ -81,7 +81,9 @@ impl TokenDeployer {
         assert!(!env::state_exists(), "The contract is already initialized",);
         assert!(
             env::predecessor_account_id() == TOKEN_FACTORY_ACCOUNT,
-            "Only token factory is allowed to execute the function"
+            "Only token factory is allowed to execute the function env {} const {}",
+            env::predecessor_account_id(),
+            TOKEN_FACTORY_ACCOUNT
         );
 
         let mut s = Self {
@@ -129,7 +131,7 @@ impl TokenDeployer {
                     "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
                     "vesting_end_time": WrappedTimestamp::from(alloc.vesting_end_time),
                     "vesting_interval": WrappedDuration::from(alloc.vesting_interval),
-                    "claimed": alloc.claimed,
+                    "claimed": WrappedBalance::from(alloc.claimed),
                 }),
             );
         }
@@ -141,8 +143,7 @@ impl TokenDeployer {
         self.assert_invalid_allocation(alloc.clone());
 
         let claimable_amount: Balance = self.get_claimable_amount(&alloc);
-
-        return json!({
+        let response_json = json!({
             "allocated_percent": alloc.allocated_percent,
             "initial_release": alloc.initial_release,
             "vesting_start_time": WrappedTimestamp::from(alloc.vesting_start_time),
@@ -151,6 +152,8 @@ impl TokenDeployer {
             "claimed": WrappedBalance::from(alloc.claimed),
             "claimable_amount": WrappedBalance::from(claimable_amount),
         });
+
+        response_json
     }
     fn get_claimable_amount(&self, alloc: &TokenAllocation) -> Balance {
         let currrent_ts = env::block_timestamp();
@@ -196,21 +199,30 @@ impl TokenDeployer {
         if env::attached_deposit() > 1 {
             transfer_promise = Promise::new(self.ft_contract_name.clone())
                 .function_call(
-                    b"storage_deposit".to_vec(), 
+                    b"storage_deposit".to_vec(),
                     json!({
                         "account_id": account_id,
-                    }).to_string().as_bytes().to_vec(), 
-                    env::attached_deposit(), DEFAULT_GAS_FEE,
-            ).then(
-                Promise::new(self.ft_contract_name.clone()).function_call(
-                    b"ft_transfer".to_vec(),
-                    json!({
-                        "receiver_id": account_id,
-                        "amount": WrappedBalance::from(amount_to_claim),
-                    }).to_string().as_bytes().to_vec(),
-                    1, DEFAULT_GAS_FEE,
+                    })
+                    .to_string()
+                    .as_bytes()
+                    .to_vec(),
+                    env::attached_deposit(),
+                    DEFAULT_GAS_FEE,
                 )
-            );
+                .then(
+                    Promise::new(self.ft_contract_name.clone()).function_call(
+                        b"ft_transfer".to_vec(),
+                        json!({
+                            "receiver_id": account_id,
+                            "amount": WrappedBalance::from(amount_to_claim),
+                        })
+                        .to_string()
+                        .as_bytes()
+                        .to_vec(),
+                        1,
+                        DEFAULT_GAS_FEE,
+                    ),
+                );
         } else {
             transfer_promise = Promise::new(self.ft_contract_name.clone()).function_call(
                 b"ft_transfer".to_vec(),
@@ -218,8 +230,11 @@ impl TokenDeployer {
                     "receiver_id": account_id,
                     "amount": WrappedBalance::from(amount_to_claim),
                 })
-                .to_string().as_bytes().to_vec(),
-                1, DEFAULT_GAS_FEE,
+                .to_string()
+                .as_bytes()
+                .to_vec(),
+                1,
+                DEFAULT_GAS_FEE,
             );
         }
 
@@ -267,9 +282,14 @@ impl TokenDeployer {
     }
 
     fn assert_invalid_allocation(&self, allocation: TokenAllocation) {
+        println!(
+            "{} >= {} + {}",
+            self.num_tokens_from_percent(allocation.allocated_percent),
+            self.num_tokens_from_percent(allocation.initial_release),
+            allocation.claimed
+        );
         assert!(
-            self.num_tokens_from_percent(allocation.allocated_percent) 
-                >= self.num_tokens_from_percent(allocation.initial_release) + allocation.claimed,
+            self.num_tokens_from_percent(allocation.allocated_percent) >= allocation.claimed,
             "Allocation is smaller than the total claimable",
         );
         assert!(
